@@ -347,3 +347,60 @@ query_pums <- function(
   return(census_data)
 }
 ```
+
+
+```{r}
+query_pums_years <- function(
+    years = 2024,
+    numeric_vars = c("AGEP", "PWGTP"),
+    categorical_vars = "SEX",
+    geography = "State",
+    geography_values = NULL,
+    rds_file = "data/variable_values.rds",
+    api_key = Sys.getenv("CENSUS_API_KEY", unset = "")
+) {
+  if (length(years) == 0 || anyNA(years) ||
+      !all(years %in% 2021:2024)) {
+    stop("years must contain only 2021, 2022, 2023, or 2024.")
+  }
+
+  yearly_data <- lapply(unique(years), function(year) {
+    data <- query_pums(
+      year = year,
+      numeric_vars = numeric_vars,
+      categorical_vars = categorical_vars,
+      geography = geography,
+      geography_values = geography_values,
+      rds_file = rds_file,
+      api_key = api_key
+    )
+
+    data$year <- as.integer(year)
+    data
+  })
+
+  combined_data <- dplyr::bind_rows(yearly_data)
+
+  class(combined_data) <- unique(c("census", class(combined_data)))
+  return(combined_data)
+}
+```
+```{r}
+Sys.setenv(CENSUS_API_KEY = "3e4b20e68905f831c2a043359f0167b043a7ae8b")
+file.exists("data/variable_values.rds")
+nc_data <- query_pums()
+
+head(nc_data)
+str(nc_data)
+class(nc_data)
+
+stopifnot(
+  nrow(nc_data) > 0,
+  inherits(nc_data, "census"),
+  is.numeric(nc_data$AGEP),
+  is.numeric(nc_data$PWGTP),
+  is.factor(nc_data$SEX)
+)
+
+```
+

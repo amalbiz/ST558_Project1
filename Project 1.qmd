@@ -79,3 +79,271 @@ dir.create("data", showWarnings = FALSE)
 
 saveRDS(variable_values, file = "data/variable_values.rds")
 ```
+```{r}
+response_to_tibble <- function(response) {
+  stop_for_status(response)
+
+  text <- content(response, as = "text", encoding = "UTF-8")
+
+  if (!jsonlite::validate(text)) {
+    stop("The API did not return JSON. Check your query and API key.")
+  }
+
+  rows <- fromJSON(text, simplifyVector = FALSE)
+
+  if (length(rows) == 0) {
+    stop("The API returned no data.")
+  }
+
+  headers <- unlist(rows[[1]], use.names = FALSE)
+
+  columns <- lapply(seq_along(headers), function(j) {
+    vapply(rows[-1], function(row) {
+      if (is.null(row[[j]])) NA_character_ else as.character(row[[j]])
+    }, character(1))
+  })
+
+  names(columns) <- headers
+  as_tibble(columns)
+}
+
+# Make codes such as "001" and "1" match
+normalize_codes <- function(x) {
+  x <- trimws(as.character(x))
+  numeric_codes <- !is.na(x) & grepl("^[0-9]+$", x)
+  x[numeric_codes] <- as.character(as.integer(x[numeric_codes]))
+  x
+}
+
+# Convert one time interval label to its midpoint in seconds
+time_midpoint <- function(label) {
+  if (is.na(label)) {
+    return(NA_real_)
+  }
+
+  label <- tolower(gsub("\\.", "", label))
+  endpoints <- strsplit(label, "\\s+to\\s+")[[1]]
+
+  if (length(endpoints) != 2) {
+    return(NA_real_)
+  }
+
+  clock_seconds <- function(x) {
+    pattern <- "^\\s*([0-9]{1,2}):([0-9]{2})\\s*(am|pm)\\s*$"
+    parts <- regmatches(x, regexec(pattern, x))[[1]]
+
+    if (length(parts) != 4) {
+      return(NA_real_)
+    }
+
+    hour <- as.numeric(parts[2]) %% 12
+    minute <- as.numeric(parts[3])
+
+    if (parts[4] == "pm") {
+      hour <- hour + 12
+    }
+
+    hour * 3600 + minute * 60
+  }
+
+  start <- clock_seconds(endpoints[1])
+  end <- clock_seconds(endpoints[2])
+
+  if (is.na(start) || is.na(end)) {
+    return(NA_real_)
+  }
+
+  # Handle intervals that cross midnight
+  if (end < start) {
+    end <- end + 86400
+  }
+
+  ((start + end) / 2) %% 86400
+}
+
+# Look up time codes and return time-of-day values
+parse_time_codes <- function(x, variable_values) {
+  labels <- unlist(variable_values$item, use.names = TRUE)
+  midpoints <- vapply(labels, time_midpoint, numeric(1))
+
+  index <- match(
+    normalize_codes(x),
+    normalize_codes(names(labels))
+  )
+
+  hms::as_hms(unname(midpoints[index]))
+}
+
+# Convert categorical codes into labeled factors
+parse_category <- function(x, variable_values) {
+  labels <- unlist(variable_values$item, use.names = TRUE)
+  codes <- normalize_codes(names(labels))
+
+  # Sort levels by their underlying numeric codes
+  ordering <- order(suppressWarnings(as.numeric(codes)), codes)
+  labels <- labels[ordering]
+  codes <- codes[ordering]
+
+  factor(
+    normalize_codes(x),
+    levels = codes,
+    labels = unname(labels)
+  )
+}
+
+query_pums <- function(
+    year = 2024,
+    numeric_vars = c("AGEP", "PWGTP"),
+    categorical_vars = "SEX",
+    geography = "State",
+    geography_values = NULL,
+    rds_file = "data/variable_values.rds",
+    api_key = Sys.getenv("CENSUS_API_KEY", unset = "")
+) {
+  # Validate year
+  if (length(year) != 1 || is.na(year) ||
+      !(year %in% 2021:2024)) {
+    stop("year must be one of 2021, 2022, 2023, or 2024.")
+  }
+
+  allowed_numeric <- c(
+    "AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP", "PWGTP"
+  )
+
+  allowed_categorical <- c("FER", "HHL", "SCH", "SCHL", "SEX")
+
+  # Validate numeric variables
+  if (!is.character(numeric_vars) || anyNA(numeric_vars) ||
+      !all(numeric_vars %in% allowed_numeric)) {
+    stop("Invalid numeric variable.")
+  }
+
+  if (!("PWGTP" %in% numeric_vars) ||
+      length(setdiff(numeric_vars, "PWGTP")) == 0) {
+    stop("Include PWGTP and at least one other numeric variable.")
+  }
+
+  # Validate categorical variables
+  if (!is.character(categorical_vars) ||
+      length(categorical_vars) == 0 ||
+      anyNA(categorical_vars) ||
+      !all(categorical_vars %in% allowed_categorical)) {
+    stop("Include at least one valid categorical variable.")
+  }
+
+  # Validate geography level
+  if (!is.character(geography) || length(geography) != 1 ||
+      is.na(geography) ||
+      !(tolower(geography) %in% c("region", "division", "state"))) {
+    stop("geography must be exactly one of Region, Division, or State.")
+  }
+
+  geography <- tolower(geography)
+  numeric_vars <- unique(numeric_vars)
+  categorical_vars <- unique(categorical_vars)
+
+  # Load the dictionaries saved in Part 1
+  dictionaries <- readRDS(rds_file)
+  metadata <- dictionaries[[as.character(year)]]
+
+  if (is.null(metadata)) {
+    stop("The RDS file does not contain the requested year.")
+  }
+
+  geography_variable <- switch(
+    geography,
+    state = if (year <= 2022) "ST" else "STATE",
+    region = "REGION",
+    division = "DIVISION"
+  )
+
+  geography_labels <- unlist(
+    metadata[[geography_variable]]$item,
+    use.names = TRUE
+  )
+
+  valid_codes <- normalize_codes(names(geography_labels))
+
+  # Defaults: North Carolina, South Atlantic, or South
+  if (is.null(geography_values)) {
+    geography_values <- switch(
+      geography,
+      state = "37",
+      division = "5",
+      region = "3"
+    )
+  }
+
+  if (length(geography_values) == 0 || anyNA(geography_values)) {
+    stop("Provide valid geography codes or 'all'.")
+  }
+
+  geography_values <- as.character(geography_values)
+
+  if (any(tolower(geography_values) == "all")) {
+    if (length(geography_values) != 1) {
+      stop("'all' cannot be combined with specific geography codes.")
+    }
+
+    geography_filter <- "*"
+  } else {
+    codes <- normalize_codes(geography_values)
+
+    if (!all(codes %in% valid_codes)) {
+      stop("Invalid geography code. Check the selected year's RDS values.")
+    }
+
+    # State FIPS codes must have two digits
+    if (geography == "state") {
+      codes <- sprintf("%02d", as.integer(codes))
+    }
+
+    geography_filter <- paste(unique(codes), collapse = ",")
+  }
+
+  # Build and submit the API query
+  url <- paste0(
+    "https://api.census.gov/data/",
+    year,
+    "/acs/acs1/pums"
+  )
+
+  query <- list(
+    get = paste(c(numeric_vars, categorical_vars), collapse = ",")
+  )
+
+  query[["for"]] <- paste0(geography, ":", geography_filter)
+
+  if (nzchar(api_key)) {
+    query$key <- api_key
+  }
+
+  response <- GET(url, query = query)
+  census_data <- response_to_tibble(response)
+
+  # Convert numeric and time variables
+  for (variable in numeric_vars) {
+    if (variable %in% c("JWAP", "JWDP")) {
+      census_data[[variable]] <- parse_time_codes(
+        census_data[[variable]],
+        metadata[[variable]]
+      )
+    } else {
+      census_data[[variable]] <- suppressWarnings(
+        as.numeric(census_data[[variable]])
+      )
+    }
+  }
+
+  # Convert categorical variables using the correct year's labels
+  for (variable in categorical_vars) {
+    census_data[[variable]] <- parse_category(
+      census_data[[variable]],
+      metadata[[variable]]
+    )
+  }
+
+  class(census_data) <- c("census", class(census_data))
+  return(census_data)
+}
+```

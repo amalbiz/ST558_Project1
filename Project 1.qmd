@@ -5,23 +5,77 @@ format: html
 editor: visual
 ---
 
-## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
-
 ```{r}
-1 + 1
+library(httr)
+library(jsonlite)
+library(tibble)
+library(hms)
+```
+```{r}
+url <- "https://api.census.gov/data/2024/acs/acs1/pums/variables.json"
+
+response <- GET(url)
+stop_for_status(response)
+
+# Convert the response to text, then parse it into R lists
+json_text <- content(response, as = "text", encoding = "UTF-8")
+dictionary <- fromJSON(json_text, simplifyVector = FALSE)
+
+# Inspect one variable
+dictionary$variables$SEX
+dictionary$variables$SEX$values
+```
+```{r}
+get_variable_values <- function(year) {
+
+  # Build the URL for the chosen year
+  url <- paste0(
+    "https://api.census.gov/data/",
+    year,
+    "/acs/acs1/pums/variables.json"
+  )
+
+  response <- GET(url)
+  stop_for_status(response)
+
+  json_text <- content(response, as = "text", encoding = "UTF-8")
+  dictionary <- fromJSON(json_text, simplifyVector = FALSE)
+
+  # State variable name changes after 2022
+  state_var <- if (year <= 2022) "ST" else "STATE"
+
+  wanted <- c(
+    "AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP",
+    "PWGTP", "FER", "HHL", "SCH", "SCHL", "SEX",
+    state_var, "REGION", "DIVISION"
+  )
+
+  # Keep only the requested variables
+  selected <- dictionary$variables[wanted]
+
+  # Extract each variable's values, preserving variable names
+  result <- lapply(selected, function(variable) {
+    variable$values
+  })
+
+  return(result)
+}
 ```
 
-You can add options to executable code like this
-
 ```{r}
-#| echo: false
-2 * 2
-```
+variable_values <- list(
+  "2021" = get_variable_values(2021),
+  "2022" = get_variable_values(2022),
+  "2023" = get_variable_values(2023),
+  "2024" = get_variable_values(2024)
+)
 
-The `echo: false` option disables the printing of code (only output is displayed).
+# Check the result
+names(variable_values[["2024"]])
+variable_values[["2024"]]$SEX
+
+# Create the folder and save the four lists in one RDS file
+dir.create("data", showWarnings = FALSE)
+
+saveRDS(variable_values, file = "data/variable_values.rds")
+```

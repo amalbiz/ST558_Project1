@@ -7,7 +7,7 @@ author: "AMJ"
 
 This project is based around developing functions with the Public Use Microdata (PUMS) Census API. The goal of this project is to learn how to work with R in a real-life application and to make something where users would be able to choose variables, survey years, and geographic subsets rather than rewriting the API request each time.
 
-I first created the reusable functions, tested them, and did a small investigation.
+I first created the reusable functions, then tested them, and later did a small investigation.
 
 ## Setting Things Up
 
@@ -723,8 +723,7 @@ cat("Weighted calculation checks passed.")
 
 ### Single-year and multiple-year downloads
 
-I tested the defaults with North Carolina and the multiple year function with Wyoming (which has the state code of `56`). 
-These are separate datasets.. `nc_data` describes North Carolina in 2024 and `combined_data` describes Wyoming in 2021–2024.
+I tested the defaults with North Carolina and the multiple year function with Wyoming (which has the state code of `56`). These are separate datasets.. `nc_data` describes North Carolina in 2024 and `combined_data` describes Wyoming in 2021–2024.
 
 ```{r}
 combined_data <- query_pums_years(
@@ -834,7 +833,6 @@ knitr::kable(data.frame(Test = names(error_checks),
                         Message = unlist(error_checks, use.names = FALSE)))
 ```
 
-
 ## Investigation
 
 ### School Enrollment Among Young Adults in North Carolina
@@ -857,7 +855,7 @@ education_data <- query_pums(
 
 #### Select Young Adults
 
-To start off, I read the school enrollment labels from the dictionary. 
+To start off, I read the school enrollment labels from the dictionary.
 
 Code 1 indicates no enrollment while codes 2 and 3 indicate enrollment. I also made sure to exclude records outside ages 18–29, records without a valid enrollment or sex category, and records without a positive weight. This is because I'm looking at the ages most likely to go to school.
 
@@ -1067,6 +1065,6 @@ enrolled_age_summary
 
 #### Conclusions
 
-The highest estimated enrollment percentage was in the **18-21** age group(s). The difference between the highest and lowest age-group percentages was **49.6 percentage points**. Across the sex categories, the difference was **5.7 percentage points**. Among enrolled young adults, the weighted mean age was **23.4 years**.
+The highest estimated enrollment percentage was in the **18-21** age group(s). The difference between the highest and lowest age-group percentages was **49.6 percentage points**. Across the sex categories, the difference was **5.7 percentage points**. Among enrolled young adults, the weighted mean age was **23.4 years**. So overall, the 18-21 age group had a much higher level of enrollment in school, and there isn't as much of a difference in the percentage of men and women who are enrolled, though women are enrolled at a slightly higher percentage. The weighted average age of young adults aged 18-29 being 23.4 years is interesting too because you wouldn't expect it to be that high. But it may have something to do with how going to school is classified as well as what type of school the census data counts as "learning".
 
-These results use data from subjects from North Carolina aged 18-29 within the 2024 sample. The results haven't been investigated further using statistical analysis or anything to make sure that they are actually significant, so the results will have to be taken with a grain of salt. But otherwise, I had a lot of fun doing this project and I learned a lot about the power of reusable functions within R.
+To reiterate, these results use data from subjects in North Carolina aged 18-29 within the 2024 sample. The results haven't been investigated further using statistical analysis or anything to make sure that they are actually significant, so the results will have to be taken with a grain of salt. But otherwise, I had a lot of fun doing this project and I learned a lot about the power of reusable functions within R!

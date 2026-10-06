@@ -7,6 +7,8 @@ author: "AMJ"
 
 This project is based around developing functions with the Public Use Microdata (PUMS) Census API. The goal of this project is to learn how to work with R in a real-life application and to make something where users would be able to choose variables, survey years, and geographic subsets rather than rewriting the API request each time.
 
+I first created the reusable functions, tested them, and did a small investigation.
+
 ## Setting Things Up
 
 ### Packages and API Key
@@ -37,9 +39,9 @@ stopifnot(nzchar(Sys.getenv("CENSUS_API_KEY")))
 
 ### Inspecting the Variable Dictionary
 
-I began with the given URL to understand the JSON structure before writing all the reusable function. So, `GET()` downloads the response, `stop_for_status()` checks for HTTP errors, and `fromJSON()` parses the text into R lists. Setting `simplifyVector = FALSE` preserves the nested list structure.
+I began with the given URL to understand the JSON structure before writing all the reusable functions. So, `GET()` downloads the response, `stop_for_status()` checks for HTTP errors, and `fromJSON()` parses the text into R lists. And setting `simplifyVector = FALSE` preserves the nested list structure.
 
-The following example looks at `SEX`. Its dictionary contains both a description and the mapping between codes and labels.
+The following example looks at `SEX`. Its dictionary includes a description and the mapping between codes and labels.
 
 ```{r}
 url <- "https://api.census.gov/data/2024/acs/acs1/pums/variables.json"
@@ -60,9 +62,9 @@ dictionary$variables$SEX$values
 
 ### Parsing Variable Values
 
-I generalized that process in `get_variable_values(year)`. The function creates the URL for the selected year, keeps the required variables, and extracts each variable's entire `values` element. Doing this preserves both category labels and numeric ranges.
+I implemented that process in `get_variable_values(year)`. The function creates the URL for the selected year, keeps the required variables, and extracts each variable's `values`. Doing this keeps both category labels and numeric ranges.
 
-As noted, the state variable is named `ST` in 2021–2022 and `STATE` in 2023–2024, so the function is able to select the name according to the year.
+One thing to note is that the state variable is named `ST` in 2021–2022 and `STATE` in 2023–2024, so the function is able to select the name according to the year.
 
 ```{r}
 get_variable_values <- function(year) {
@@ -101,7 +103,7 @@ get_variable_values <- function(year) {
 }
 ```
 
-Here, I call the function for each year and save the four named lists in one RDS file which is found in the data folder. All coming functions can read this file to interpret the returned codes using the appropriate year's dictionary.
+Here, I'm calling the function for each year and saving the four named lists in one RDS file which is found in the data folder. All upcoming functions can read this file to interpret the returned codes using the appropriate year's dictionary.
 
 ```{r}
 variable_values <- list(
@@ -435,7 +437,7 @@ query_pums <- function(
 
 ### Combining Years
 
-`query_pums_years()` calls the single-year function for each distinct requested year. Each result receives a `year` column, and `bind_rows()` combines the results into one census tibble. Assigning the returned value to an object such as `combined_data` makes it available to later chunks.
+`query_pums_years()` calls the single-year function for each requested year. Each result receives a `year` column, and `bind_rows()` combines the results into one census tibble. Assigning the returned value to an object like `combined_data` makes it available to our later functions and function calls.
 
 ```{r}
 query_pums_years <- function(
@@ -478,18 +480,18 @@ query_pums_years <- function(
 
 ### Generic Functions
 
-R uses the `census` class to run our custom `summary.census()` and `plot.census()` methods when we call `summary()` or `plot()`.
+R uses the `census` class to run our custom `summary.census()` and `plot.census()` functions when we call `summary()` or `plot()`.
 
 The summary function returns a named list containing:
 
 - Weighted means and standard deviations for numeric variables.
 - Weighted counts for categorical variables.
 
-By default, it summarizes all eligible columns. It excludes `PWGTP` and time variables from numeric summaries and treats `year` as categorical. Users can choose specific columns or use `character(0)` to skip either type of summary.
+By default, it summarizes all eligible columns. It excludes `PWGTP` and time variables from numeric summaries and treats `year` as a categorical variable. Users can choose specific columns or use `character(0)` to skip either type of summary.
 
-Here, $x_i$ is a numeric value and $w_i$ is its `PWGTP` weight. Missing numeric values and their weights are excluded from that calculation. Missing categorical values are counted separately.
+Here, $x_i$ is a numeric value and $w_i$ is its respective `PWGTP` weight. Missing numeric values and their weights are not included in that calculation. However, missing categorical values are counted separately.
 
-The plotting function creates a boxplot for one numeric variable across the groups of one categorical variable. It includes `weight = PWGTP` to account for each row's weight. Time variables and `PWGTP` cannot be used as the numeric plotting variable.
+The plotting function creates a boxplot for one numeric variable across the groups of one categorical variable. It includes `weight = PWGTP` to account for each row's weight.
 
 ```{r}
 # Weighted summaries: called automatically by summary(census_data)
@@ -673,7 +675,7 @@ plot.census <- function(x, cat_var, num_var, ...) {
 
 ### Dictionary structure and time parsing
 
-These checks verify that all four dictionaries contain the required variables and that time conversion handles morning, noon, midnight, and missing values. A failed `stopifnot()` stops rendering, so a success message appears only if its checks pass.
+These checks verify that all four dictionaries contain the required variables and that time conversion handles morning, noon, midnight, and missing values. A success message appears only if checks pass.
 
 ```{r}
 for (y in 2021:2024) {
@@ -701,7 +703,7 @@ cat("Dictionary and time parsing checks passed.")
 
 ### Checking weighted calculations by hand
 
-For ages 20 and 40 with weights 1 and 3, the weighted mean is 35 and the weighted standard deviation is $\sqrt{75}$, or approximately 8.66. The weighted counts should be 1 for group A and 3 for group B. This small example checks the arithmetic independently of the API.
+For ages 20 and 40, which have weights 1 and 3, the weighted mean is 35 and the weighted standard deviation is $\sqrt{75}$, or about 8.66. The weighted counts should be 1 for group A and 3 for group B. This example checks the math independently of the API.
 
 ```{r}
 toy_data <- tibble::tibble(
@@ -721,7 +723,8 @@ cat("Weighted calculation checks passed.")
 
 ### Single-year and multiple-year downloads
 
-I test the defaults with North Carolina and the multiple-year function with Wyoming (state code `56`). Wyoming keeps the four-year test relatively small. These are separate datasets: `nc_data` describes North Carolina in 2024; `combined_data` describes Wyoming in 2021–2024.
+I tested the defaults with North Carolina and the multiple year function with Wyoming (which has the state code of `56`). 
+These are separate datasets.. `nc_data` describes North Carolina in 2024 and `combined_data` describes Wyoming in 2021–2024.
 
 ```{r}
 combined_data <- query_pums_years(
@@ -754,9 +757,9 @@ cat("Single-year and multiple-year checks passed.")
 
 ### Summary and plot methods with different inputs
 
-First, I call the default summary and then select age and sex explicitly. I also select `year` in the combined data. The plots use different categorical inputs: sex for North Carolina and year for Wyoming. These weighted age plots demonstrate method dispatch and provide a visual check of the returned data.
+First, I called the default summary and then selected age and sex. I also selected `year` in the combined data. The plots use `sex` for North Carolina and `year` for Wyoming.
 
-The combined summary pools the four annual samples. Its weighted counts across years should not be interpreted as a count of unique people.
+The combined summary combines the four yearly samples.
 
 ```{r}
 # Summarize all eligible variables
@@ -800,7 +803,7 @@ plot(combined_data, cat_var = "year", num_var = "AGEP")+ggplot2::theme_gray()
 
 ### Invalid inputs
 
-The following tests deliberately supply invalid arguments. Each test checks that an error occurs and displays its message while allowing the document to continue. This verifies that the functions reject invalid requests rather than silently downloading unintended data.
+The following tests provide invalid arguments. Each test checks that an error occurs and displays the error message. This is just to check if the functions reject invalid requests/data properly.
 
 ```{r}
 expect_error <- function(expr) {
@@ -831,144 +834,239 @@ knitr::kable(data.frame(Test = names(error_checks),
                         Message = unlist(error_checks, use.names = FALSE)))
 ```
 
-These examples test the State geography option. They do not constitute a live test of every Region, Division, or all-geographies query.
 
 ## Investigation
 
-### Commuting Time in North Carolina
+### School Enrollment Among Young Adults in North Carolina
 
 #### Question and Data Selection
 
-Among North Carolina adults with a positive reported commute in 2024, how does commuting time differ by age group and sex?
+How does school enrollment vary by age group and sex among North Carolina residents aged 18–29 in 2024?
 
-I use `JWMNP` for travel time to work in minutes, `AGEP` for age, and `SEX` for the sex categories returned by the Census. I also request `JWDP` to verify time-column conversion. The query below demonstrates different numeric inputs from the earlier age-only examples.
+I used age (`AGEP`), school enrollment (`SCH`), sex (`SEX`), and person weights (`PWGTP`). School enrollment includes school, college, and home school, so it doesn't mean specifically college enrollment alone. The Census Variable dictionary also identifies people who attended public or private school from those who didn't attend either in the data.
 
 ```{r}
-commute_data <- query_pums(
+education_data <- query_pums(
   year = 2024,
-  numeric_vars = c("AGEP", "PWGTP", "JWMNP", "JWDP"),
-  categorical_vars = "SEX",
+  numeric_vars = c("AGEP", "PWGTP"),
+  categorical_vars = c("SCH", "SEX"),
   geography = "State",
   geography_values = "37"
 )
-stopifnot(is.numeric(commute_data$JWMNP),
-          inherits(commute_data$JWDP, "hms"))
-head(commute_data[c("AGEP", "JWMNP", "JWDP", "SEX")])
 ```
 
-#### Select Adult Commuters
+#### Select Young Adults
+
+To start off, I read the school enrollment labels from the dictionary. 
+
+Code 1 indicates no enrollment while codes 2 and 3 indicate enrollment. I also made sure to exclude records outside ages 18–29, records without a valid enrollment or sex category, and records without a positive weight. This is because I'm looking at the ages most likely to go to school.
 
 ```{r}
-# Keep adults with valid, positive travel time and positive weight.
-keep <- with(commute_data,
-             is.finite(AGEP) & AGEP >= 18 &
-             is.finite(JWMNP) & JWMNP > 0 &
-             is.finite(PWGTP) & PWGTP > 0 & !is.na(SEX))
-commuters <- commute_data[keep, ]
-stopifnot(nrow(commuters) > 0)
-```
+dictionary_2024 <- readRDS("data/variable_values.rds")[["2024"]]
+school_labels <- unlist(dictionary_2024$SCH$item, use.names = TRUE)
+school_codes <- normalize_codes(names(school_labels))
 
-#### Create Age Groups
+enrolled_labels <- unname(school_labels[school_codes %in% c("2", "3")])
+not_enrolled_label <- unname(school_labels[school_codes == "1"])
 
-```{r}
-commuters$age_group <- cut(
-  commuters$AGEP,
-  breaks = c(18, 30, 45, 65, Inf), right = FALSE,
-  labels = c("18–29", "30–44", "45–64", "65+")
+stopifnot(length(enrolled_labels) == 2,
+          length(not_enrolled_label) == 1)
+
+keep <- with(
+  education_data,
+  is.finite(AGEP) & AGEP >= 18 & AGEP <= 29 &
+    is.finite(PWGTP) & PWGTP > 0 &
+    !is.na(SEX) &
+    SCH %in% c(enrolled_labels, not_enrolled_label)
 )
-knitr::kable(data.frame(
-  Stage = c("All downloaded records", "Included adult commuters"),
-  Records = c(nrow(commute_data), nrow(commuters))
-))
+
+young_adults <- education_data[keep, ]
+stopifnot(nrow(young_adults) > 0,
+          inherits(young_adults, "census"))
 ```
 
-This restriction avoids treating not-applicable or zero commute values as actual travel times. It excludes people without a positive reported commute, including people working from home, so the results describe this selected group rather than all adults.
+#### Create Enrollment and Age Groups
 
-### Overall weighted summary
-
-Here, I summarize two numeric variables and two categorical variables in one call. The time column `JWDP` is not included in the numeric summary.
+I combined public and private enrollment into one category and divided the age range I created into three different groups of four years each to make some categories.
 
 ```{r}
-commute_summary <- summary(
-  commuters,
-  numeric_vars = c("AGEP", "JWMNP"),
-  categorical_vars = c("SEX", "age_group")
+young_adults$enrollment <- factor(
+  ifelse(young_adults$SCH %in% enrolled_labels,
+         "Enrolled", "Not enrolled"),
+  levels = c("Not enrolled", "Enrolled")
 )
-commute_summary
-overall_minutes <- unname(commute_summary$numeric$JWMNP["mean"])
-overall_sd <- unname(commute_summary$numeric$JWMNP["sd"])
+
+young_adults$age_group <- cut(
+  young_adults$AGEP,
+  breaks = c(18, 22, 26, 30),
+  right = FALSE,
+  labels = c("18–21", "22–25", "26–29")
+)
 ```
 
-The weighted mean commute in the included sample is **`r round(overall_minutes, 2)` minutes**, with a weighted standard deviation of **`r round(overall_sd, 2)` minutes**. The categorical counts are sums of person weights, not the number of downloaded rows.
+#### Overall Weighted Summary
 
-### Comparison by age group
-
-I use the custom plot method with a newly created categorical variable, `age_group`, and a different numeric variable, `JWMNP`. The boxplot shows distributions, while the table reports group means and standard deviations.
+I used my summary method to calculate the mean age, the standard deviation of age, and the weighted categorical counts.
 
 ```{r}
-plot(commuters, cat_var = "age_group", num_var = "JWMNP") +
-  ggplot2::labs(title = "Commuting time by age group: North Carolina, 2024",
-                x = "Age group", y = "Travel time to work (minutes)")+ggplot2::theme_gray()
+education_summary <- summary(
+  young_adults,
+  numeric_vars = "AGEP",
+  categorical_vars = c("enrollment", "age_group", "SEX")
+)
+education_summary
 ```
 
-#### Summarize Each Group
+```{r}
+enrollment_counts <- education_summary$categorical$enrollment
+overall_enrollment_pct <- 100 * enrollment_counts["Enrolled"] /
+  sum(enrollment_counts)
 
-The helper below calls `summary()` separately for each group and collects the results in a table.
+knitr::kable(
+  data.frame(
+    Sample_records = nrow(young_adults),
+    Weighted_population = sum(young_adults$PWGTP),
+    Mean_age = unname(education_summary$numeric$AGEP["mean"]),
+    Enrollment_percent = unname(overall_enrollment_pct)
+  ),
+  digits = 1,
+  col.names = c("Sample records", "Estimated people",
+                "Mean age", "Enrolled (%)")
+)
+```
+
+Among the included young adults, about **33.33%** were enrolled. The weighted mean age was **23.4 years**.
+
+#### Compare Enrollment Percentages
+
+Raw enrollment counts depend on how many people are in each group. To compare groups, I divided each group's weighted enrolled count by its total weighted count.
+
+This helper function calls my summary method separately for each of the age groups. It also demonstrates a categorical-only summary by supplying `character(0)` for numeric variables.
 
 ```{r}
-# This helper uses summary.census() for every group's calculations.
-group_summary_table <- function(data, group_var) {
-  groups <- levels(droplevels(data[[group_var]]))
-  tables <- lapply(groups, function(g) {
-    subset <- data[!is.na(data[[group_var]]) & data[[group_var]] == g, ]
-    result <- summary(subset, numeric_vars = "JWMNP",
-                      categorical_vars = group_var)
-    data.frame(
-      Group = g,
-      Weighted_count = sum(result$categorical[[group_var]]),
-      Mean_minutes = unname(result$numeric$JWMNP["mean"]),
-      SD_minutes = unname(result$numeric$JWMNP["sd"])
+enrollment_by_group <- function(data, group_var) {
+  groups <- levels(droplevels(factor(data[[group_var]])))
+
+  rows <- lapply(groups, function(group) {
+    group_data <- data[as.character(data[[group_var]]) == group, ]
+
+    group_summary <- summary(
+      group_data,
+      numeric_vars = character(0),
+      categorical_vars = "enrollment"
+    )
+
+    counts <- group_summary$categorical$enrollment
+
+    tibble::tibble(
+      group = group,
+      sample_records = nrow(group_data),
+      weighted_population = sum(counts),
+      weighted_enrolled = unname(counts["Enrolled"]),
+      enrollment_percent = 100 * unname(counts["Enrolled"]) / sum(counts)
     )
   })
-  do.call(rbind, tables)
+
+  dplyr::bind_rows(rows)
 }
 ```
 
-#### Report the Age-Group Results
+#### Enrollment by Age Group
 
 ```{r}
-age_results <- group_summary_table(commuters, "age_group")
-knitr::kable(age_results, digits = 2,
-             col.names = c("Age group", "Weighted count", "Mean minutes", "SD minutes"))
-age_high <- age_results$Group[which.max(age_results$Mean_minutes)]
-age_low <- age_results$Group[which.min(age_results$Mean_minutes)]
-age_gap <- diff(range(age_results$Mean_minutes))
+enrollment_by_age <- enrollment_by_group(young_adults, "age_group")
+
+knitr::kable(
+  enrollment_by_age,
+  digits = 1,
+  col.names = c("Age group", "Sample records", "Estimated people",
+                "Estimated enrolled", "Enrolled (%)")
+)
 ```
 
-The **`r age_high`** group has the highest weighted mean commute and the **`r age_low`** group has the lowest. The difference between the largest and smallest group means is **`r round(age_gap, 2)` minutes**. If groups tie, this identifies the first tied group in table order. The boxplot complements these averages by showing the spread within each group.
-
-### Comparison by sex
-
-I next change the plot's categorical input to `SEX` and calculate separate weighted summaries for its levels. The grouping table calls my summary method on each subset; the summary method itself does not automatically group numeric statistics by the requested categorical variables.
+The percentages in this table compare enrollment within each age group, rather than each group's share of all enrolled people. The age group `18-21` had the highest enrollment percentage with **62.2%**, while the age group `26-29` had the lowest enrollment percentage with **12.6%**.
 
 ```{r}
-plot(commuters, cat_var = "SEX", num_var = "JWMNP") +
-  ggplot2::labs(title = "Commuting time by sex: North Carolina, 2024",
-                x = "Sex", y = "Travel time to work (minutes)")+ggplot2::theme_gray()
+ggplot2::ggplot(
+  enrollment_by_age,
+  ggplot2::aes(x = group, y = enrollment_percent)
+) +
+  ggplot2::geom_col(fill = "steelblue") +
+  ggplot2::scale_y_continuous(limits = c(0, 100)) +
+  ggplot2::labs(
+    title = "School enrollment by age group",
+    subtitle = "North Carolina residents aged 18–29, 2024",
+    x = "Age group",
+    y = "Enrolled (%)"
+  ) +
+  ggplot2::theme_gray()
 ```
 
-#### Report the Sex-Group Results
+This chart shows us the difference between the age groups and enrollment percentage! The 18-21 category dwarfs the other categories by a good amount. It makes sense though as that is when most students graduate high school and are going through college.
+
+#### Enrollment by Sex
 
 ```{r}
-sex_results <- group_summary_table(commuters, "SEX")
-knitr::kable(sex_results, digits = 2,
-             col.names = c("Sex", "Weighted count", "Mean minutes", "SD minutes"))
-sex_high <- sex_results$Group[which.max(sex_results$Mean_minutes)]
-sex_gap <- diff(range(sex_results$Mean_minutes))
+enrollment_by_sex <- enrollment_by_group(young_adults, "SEX")
+
+knitr::kable(
+  enrollment_by_sex,
+  digits = 1,
+  col.names = c("Sex", "Sample records", "Estimated people",
+                "Estimated enrolled", "Enrolled (%)")
+)
 ```
 
-The largest weighted mean in this comparison is for **`r sex_high`**, and the range of the group means is **`r round(sex_gap, 2)` minutes**. These are descriptive differences; they do not establish that sex causes differences in commuting time.
+The sex comparison uses the categories supplied by the Census. We can see that a larger percentage of women are estimated to be enrolled.
 
-## Conclusion
+#### Weighted Boxplot: Age by Enrollment
 
-For the North Carolina investigation, the overall weighted mean is **`r round(overall_minutes, 2)` minutes**. The age-group mean range is **`r round(age_gap, 2)` minutes**, and the sex-group mean range is **`r round(sex_gap, 2)` minutes**.
+I use my plotting method to compare the age distributions of enrolled and non-enrolled young adults. The boxplots show age distributions, while the tables above show enrollment percentages.
+
+```{r}
+plot(young_adults, cat_var = "enrollment", num_var = "AGEP") +
+  ggplot2::labs(
+    title = "Age by school enrollment",
+    subtitle = "North Carolina residents aged 18–29, 2024",
+    x = "School enrollment",
+    y = "Age (years)"
+  ) +
+  ggplot2::theme_gray()
+```
+
+#### Weighted Boxplot: Age by Sex Among Enrolled Young Adults
+
+For a second use of my plotting method, I selected enrolled young adults and change the categorical variable to sex.
+
+```{r}
+enrolled_adults <- young_adults[young_adults$enrollment == "Enrolled", ]
+stopifnot(nrow(enrolled_adults) > 0)
+
+plot(enrolled_adults, cat_var = "SEX", num_var = "AGEP") +
+  ggplot2::labs(
+    title = "Age by sex among enrolled young adults",
+    subtitle = "North Carolina residents aged 18–29, 2024",
+    x = "Sex",
+    y = "Age (years)"
+  ) +
+  ggplot2::theme_gray()
+```
+
+You can see that when comparing sex, the boxplots are quite similar in terms of the minimum, Q1, median, Q3, and maximum. This means that there aren't many differences between the age distributions of men vs. women.
+
+Next, I used my summary method with only a numeric variable to describe the ages of enrolled young adults.
+
+```{r}
+enrolled_age_summary <- summary(
+  enrolled_adults,
+  numeric_vars = "AGEP",
+  categorical_vars = character(0)
+)
+enrolled_age_summary
+```
+
+#### Conclusions
+
+The highest estimated enrollment percentage was in the **18-21** age group(s). The difference between the highest and lowest age-group percentages was **49.6 percentage points**. Across the sex categories, the difference was **5.7 percentage points**. Among enrolled young adults, the weighted mean age was **23.4 years**.
+
+These results use data from subjects from North Carolina aged 18-29 within the 2024 sample. The results haven't been investigated further using statistical analysis or anything to make sure that they are actually significant, so the results will have to be taken with a grain of salt. But otherwise, I had a lot of fun doing this project and I learned a lot about the power of reusable functions within R.

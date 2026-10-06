@@ -6,9 +6,8 @@ format:
     toc: true
     code-fold: true
     code-tools: true
-    theme:
-      light: minty
-      dark: vapor
+    theme: cerulean
+    css: styles.css
 editor: visual
 ---
 

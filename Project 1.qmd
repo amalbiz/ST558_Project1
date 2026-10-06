@@ -16,24 +16,39 @@ editor: visual
 
 This project is based around developing functions with the Public Use Microdata (PUMS) Census API. The goal of this project is to learn how to work with R in a real-life application and to make something where users would be able to choose variables, survey years, and geographic subsets rather than rewriting the API request each time.
 
-## Setup
+## Setting Things Up
 
-The API key is stored in a separate `.Renviron` file in the main project folder, which will allow the API key to be used without it being exposed in the GitHub commits. I did this by making a `.gitignore` file which doesn't push any files to GitHub with the `.Renviron` file type extension.
+### Packages and API Key
 
-The code below loads the key and also all the packages that I will need to complete this project. The `quantreg` and `ggplot2` packages are useful for creating plots!
+These are all the packages I am using for this project. The `quantreg` and `ggplot2` packages are useful for creating plots!
 
 ```{r}
+# Read packages
 library(httr)
 library(jsonlite)
 library(tibble)
 library(hms)
 library(quantreg)
 library(ggplot2)
+```
+
+#### Load the API Key
+
+The API key is stored in a separate `.Renviron` file in the main project folder, which will allow the API key to be used without it being exposed in the GitHub commits. I did this by making a `.gitignore` file which doesn't push any files to GitHub with the `.Renviron` file type extension. The code below loads the API key.
+
+```{r}
+# Import API Key
 readRenviron(".Renviron")
 stopifnot(nzchar(Sys.getenv("CENSUS_API_KEY")))
 ```
 
-## Creating the functions
+## Data
+
+### Inspecting the Variable Dictionary
+
+I began with the given URL to understand the JSON structure before writing all the reusable function. So, `GET()` downloads the response, `stop_for_status()` checks for HTTP errors, and `fromJSON()` parses the text into R lists. Setting `simplifyVector = FALSE` preserves the nested list structure.
+
+The following example looks at `SEX`. Its dictionary contains both a description and the mapping between codes and labels.
 
 ```{r}
 url <- "https://api.census.gov/data/2024/acs/acs1/pums/variables.json"
@@ -49,6 +64,14 @@ dictionary <- fromJSON(json_text, simplifyVector = FALSE)
 dictionary$variables$SEX
 dictionary$variables$SEX$values
 ```
+
+## Part 1: Data Processing
+
+### Parsing Variable Values
+
+I generalized that process in `get_variable_values(year)`. The function creates the URL for the selected year, keeps the required variables, and extracts each variable's entire `values` element. Doing this preserves both category labels and numeric ranges.
+
+As noted, the state variable is named `ST` in 2021–2022 and `STATE` in 2023–2024, so the function is able to select the name according to the year.
 
 ```{r}
 get_variable_values <- function(year) {
@@ -87,6 +110,8 @@ get_variable_values <- function(year) {
 }
 ```
 
+Here, I call the function for each year and save the four named lists in one RDS file which is found in the data folder. All coming functions can read this file to interpret the returned codes using the appropriate year's dictionary.
+
 ```{r}
 variable_values <- list(
   "2021" = get_variable_values(2021),
@@ -94,16 +119,39 @@ variable_values <- list(
   "2023" = get_variable_values(2023),
   "2024" = get_variable_values(2024)
 )
+```
 
+#### Inspect the Selected Values
+
+```{r}
 # Check the result
 names(variable_values[["2024"]])
 variable_values[["2024"]]$SEX
+```
 
+#### Save the Dictionaries
+
+```{r}
 # Create the folder and save the four lists in one RDS file
 dir.create("data", showWarnings = FALSE)
-
 saveRDS(variable_values, file = "data/variable_values.rds")
 ```
+
+### Parsing API Data
+
+I divided the parsing work into many helper functions. Here is what they are and what they all do:
+
+- `response_to_tibble()` takes a `GET()` response, uses its first row as column names, and converts the remaining rows into a tibble.
+- `normalize_codes()` lets codes like `001` and `1` match.
+- `time_midpoint()` converts a labeled time interval into its midpoint in seconds, which accounts for any intervals crossing midnight as well as A.M. and P.M.
+- `parse_time_codes()` looks up time labels and returns `hms` time-of-day values. Missing or unparseable time intervals become `NA`.
+- `parse_category()` converts category codes into labeled factors.
+
+The main `query_pums()` function validates the year, variable selections, geography level, and geography codes before calling the API. It requires `PWGTP`, at least one other numeric variable, and at least one categorical variable. Defaults select age and sex in North Carolina in 2024. Region and Division have separate default codes, and `geography_values = "all"` requests all values within the selected geography level.
+
+After downloading, the function converts columns to their appropriate types and adds the `census` class. This class is what enables the custom summary and plot methods below.
+
+#### Convert an API Response into a Tibble
 
 ```{r}
 response_to_tibble <- function(response) {
@@ -132,7 +180,11 @@ response_to_tibble <- function(response) {
   names(columns) <- headers
   as_tibble(columns)
 }
+```
 
+#### Normalize Variable Codes
+
+```{r}
 # Make codes such as "001" and "1" match
 normalize_codes <- function(x) {
   x <- trimws(as.character(x))
@@ -140,7 +192,11 @@ normalize_codes <- function(x) {
   x[numeric_codes] <- as.character(as.integer(x[numeric_codes]))
   x
 }
+```
 
+#### Find the Midpoint of a Time Interval
+
+```{r}
 # Convert one time interval label to its midpoint in seconds
 time_midpoint <- function(label) {
   if (is.na(label)) {
@@ -186,7 +242,11 @@ time_midpoint <- function(label) {
 
   ((start + end) / 2) %% 86400
 }
+```
 
+#### Convert Time Codes into Time Values
+
+```{r}
 # Look up time codes and return time-of-day values
 parse_time_codes <- function(x, variable_values) {
   labels <- unlist(variable_values$item, use.names = TRUE)
@@ -199,7 +259,11 @@ parse_time_codes <- function(x, variable_values) {
 
   hms::as_hms(unname(midpoints[index]))
 }
+```
 
+#### Convert Categorical Codes into Factors
+
+```{r}
 # Convert categorical codes into labeled factors
 parse_category <- function(x, variable_values) {
   labels <- unlist(variable_values$item, use.names = TRUE)
@@ -216,7 +280,11 @@ parse_category <- function(x, variable_values) {
     labels = unname(labels)
   )
 }
+```
 
+#### Query and Clean One Survey Year
+
+```{r}
 query_pums <- function(
     year = 2024,
     numeric_vars = c("AGEP", "PWGTP"),
@@ -374,6 +442,10 @@ query_pums <- function(
 }
 ```
 
+### Combining Years
+
+`query_pums_years()` calls the single-year function for each distinct requested year. Each result receives a `year` column, and `bind_rows()` combines the results into one census tibble. Assigning the returned value to an object such as `combined_data` makes it available to later chunks.
+
 ```{r}
 query_pums_years <- function(
     years = 2024,
@@ -411,16 +483,22 @@ query_pums_years <- function(
 }
 ```
 
-```{r}
-combined_data <- query_pums_years(
-  years = 2021:2024,
-  geography = "State",
-  geography_values = "56"  
-)
-file.exists("data/variable_values.rds")
-nc_data <- query_pums()
+## Part 2: Writing a Generic Function for Summarizing
 
-```
+### Generic Functions
+
+R uses the `census` class to run our custom `summary.census()` and `plot.census()` methods when we call `summary()` or `plot()`.
+
+The summary function returns a named list containing:
+
+- Weighted means and standard deviations for numeric variables.
+- Weighted counts for categorical variables.
+
+By default, it summarizes all eligible columns. It excludes `PWGTP` and time variables from numeric summaries and treats `year` as categorical. Users can choose specific columns or use `character(0)` to skip either type of summary.
+
+Here, $x_i$ is a numeric value and $w_i$ is its `PWGTP` weight. Missing numeric values and their weights are excluded from that calculation. Missing categorical values are counted separately.
+
+The plotting function creates a boxplot for one numeric variable across the groups of one categorical variable. It includes `weight = PWGTP` to account for each row's weight. Time variables and `PWGTP` cannot be used as the numeric plotting variable.
 
 ```{r}
 # Weighted summaries: called automatically by summary(census_data)
@@ -429,41 +507,45 @@ summary.census <- function(
     numeric_vars = NULL,
     categorical_vars = NULL
 ) {
-  is_numeric_variable <- function(x) {
-    is.numeric(x) &&
-      !inherits(x, c("difftime", "POSIXt", "Date"))
-  }
-
-  allowed_numeric <- names(object)[
-    vapply(object, is_numeric_variable, logical(1))
+  # Find numeric columns, excluding time variables, weights, and year
+  numeric_columns <- names(object)[
+    vapply(object, function(x) {
+      is.numeric(x) &&
+        !inherits(x, c("difftime", "POSIXt", "Date"))
+    }, logical(1))
   ]
-  allowed_numeric <- setdiff(allowed_numeric, c("PWGTP", "year"))
 
-  allowed_categorical <- names(object)[
+  numeric_columns <- setdiff(numeric_columns, c("PWGTP", "year"))
+
+  # Find categorical columns, including year
+  categorical_columns <- names(object)[
     vapply(object, function(x) {
       is.factor(x) || is.character(x) || is.logical(x)
     }, logical(1))
   ]
-  allowed_categorical <- union(
-    allowed_categorical,
+
+  categorical_columns <- union(
+    categorical_columns,
     intersect("year", names(object))
   )
 
+  # Default to all eligible columns
   if (is.null(numeric_vars)) {
-    numeric_vars <- allowed_numeric
+    numeric_vars <- numeric_columns
   }
 
   if (is.null(categorical_vars)) {
-    categorical_vars <- allowed_categorical
+    categorical_vars <- categorical_columns
   }
 
+  # Check the selected variables
   if (!is.character(numeric_vars) || anyNA(numeric_vars) ||
-      !all(numeric_vars %in% allowed_numeric)) {
+      !all(numeric_vars %in% numeric_columns)) {
     stop("Choose valid numeric variables, excluding PWGTP, year, and times.")
   }
 
   if (!is.character(categorical_vars) || anyNA(categorical_vars) ||
-      !all(categorical_vars %in% allowed_categorical)) {
+      !all(categorical_vars %in% categorical_columns)) {
     stop("Choose valid categorical variables or year.")
   }
 
@@ -474,59 +556,70 @@ summary.census <- function(
     stop("PWGTP must contain finite, nonnegative numeric weights.")
   }
 
-  numeric_results <- lapply(unique(numeric_vars), function(variable) {
-    x <- object[[variable]]
+  # Calculate weighted means and standard deviations
+  numeric_results <- list()
 
-    # Exclude missing values and their weights for this variable
-    keep <- is.finite(x) & weights > 0
-    x <- x[keep]
-    w <- weights[keep]
+  for (variable in numeric_vars) {
+    numeric_vector <- object[[variable]]
+    weight_vector <- weights
 
-    if (length(x) == 0) {
-      return(c(mean = NA_real_, sd = NA_real_))
+    # Remove missing values and their corresponding weights
+    keep <- is.finite(numeric_vector) & weight_vector > 0
+    numeric_vector <- numeric_vector[keep]
+    weight_vector <- weight_vector[keep]
+
+    if (length(numeric_vector) == 0) {
+      sample_mean <- NA_real_
+      sample_sd <- NA_real_
+    } else {
+      sample_mean <- sum(numeric_vector * weight_vector) /
+        sum(weight_vector)
+
+      sample_sd <- sqrt(
+        sum(numeric_vector^2 * weight_vector) /
+          sum(weight_vector) - sample_mean^2
+      )
     }
 
-    weighted_mean <- sum(x * w) / sum(w)
-
-    # Equivalent to the assignment's formula, but more numerically stable
-    weighted_sd <- sqrt(
-      sum(w * (x - weighted_mean)^2) / sum(w)
+    numeric_results[[variable]] <- c(
+      mean = sample_mean,
+      sd = sample_sd
     )
+  }
 
-    c(mean = weighted_mean, sd = weighted_sd)
-  })
+  # Calculate weighted counts for categorical variables
+  categorical_results <- list()
 
-  names(numeric_results) <- unique(numeric_vars)
+  for (variable in categorical_vars) {
+    category <- object[[variable]]
 
-  categorical_results <- lapply(
-    unique(categorical_vars),
-    function(variable) {
-      x <- object[[variable]]
-
-      if (!is.factor(x)) {
-        x <- factor(x)
-      }
-
-      # Include missing values as a separate category when present
-      x <- addNA(x, ifany = TRUE)
-
-      counts <- tapply(weights, x, sum, default = 0)
-      setNames(as.numeric(counts), names(counts))
+    if (!is.factor(category)) {
+      category <- factor(category)
     }
-  )
 
-  names(categorical_results) <- unique(categorical_vars)
+    category <- addNA(category, ifany = TRUE)
 
-  list(
+    counts <- tapply(weights, category, sum, default = 0)
+
+    categorical_results[[variable]] <- setNames(
+      as.numeric(counts),
+      names(counts)
+    )
+  }
+
+  # Return a named list
+  return(list(
     numeric = numeric_results,
     categorical = categorical_results
-  )
+  ))
 }
+```
 
+### Graphical Summaries
 
-# Weighted boxplots require ggplot2 and quantreg:
-# install.packages(c("ggplot2", "quantreg"))
+This method creates a weighted boxplot for the chosen numeric and categorical columns.
 
+```{r}
 # Called automatically by plot(census_data, ...)
 plot.census <- function(x, cat_var, num_var, ...) {
   if (!is.character(cat_var) || length(cat_var) != 1 ||
@@ -583,27 +676,308 @@ plot.census <- function(x, cat_var, num_var, ...) {
     ) +
     ggplot2::theme_minimal()
 }
+```
 
+## Testing the Functions
 
+### Dictionary structure and time parsing
+
+These checks verify that all four dictionaries contain the required variables and that time conversion handles morning, noon, midnight, and missing values. A failed `stopifnot()` stops rendering, so a success message appears only if its checks pass.
+
+```{r}
+for (y in 2021:2024) {
+  state_name <- if (y <= 2022) "ST" else "STATE"
+  expected <- c("AGEP", "GASP", "GRPIP", "JWAP", "JWDP", "JWMNP",
+                "PWGTP", "FER", "HHL", "SCH", "SCHL", "SEX",
+                state_name, "REGION", "DIVISION")
+  d <- variable_values[[as.character(y)]]
+  stopifnot(setequal(names(d), expected),
+            all(vapply(d, function(x) !is.null(x), logical(1))))
+}
+```
+
+#### Test Time Midpoints
+
+```{r}
+stopifnot(
+  time_midpoint("6:00 a.m. to 6:04 a.m.") == 21720,
+  time_midpoint("12:00 p.m. to 12:04 p.m.") == 43320,
+  time_midpoint("12:00 a.m. to 12:04 a.m.") == 120,
+  is.na(time_midpoint("N/A (not a worker)"))
+)
+cat("Dictionary and time parsing checks passed.")
+```
+
+### Checking weighted calculations by hand
+
+For ages 20 and 40 with weights 1 and 3, the weighted mean is 35 and the weighted standard deviation is $\sqrt{75}$, or approximately 8.66. The weighted counts should be 1 for group A and 3 for group B. This small example checks the arithmetic independently of the API.
+
+```{r}
+toy_data <- tibble::tibble(
+  AGEP = c(20, 40), PWGTP = c(1, 3), group = factor(c("A", "B"))
+)
+class(toy_data) <- c("census", class(toy_data))
+toy_summary <- summary(toy_data)
+stopifnot(
+  isTRUE(all.equal(unname(toy_summary$numeric$AGEP["mean"]), 35)),
+  isTRUE(all.equal(unname(toy_summary$numeric$AGEP["sd"]), sqrt(75))),
+  toy_summary$categorical$group["A"] == 1,
+  toy_summary$categorical$group["B"] == 3
+)
+toy_summary
+cat("Weighted calculation checks passed.")
+```
+
+### Single-year and multiple-year downloads
+
+I test the defaults with North Carolina and the multiple-year function with Wyoming (state code `56`). Wyoming keeps the four-year test relatively small. These are separate datasets: `nc_data` describes North Carolina in 2024; `combined_data` describes Wyoming in 2021–2024.
+
+```{r}
+combined_data <- query_pums_years(
+  years = 2021:2024,
+  geography = "State",
+  geography_values = "56"  
+)
+```
+
+#### Download One Year
+
+```{r}
+file.exists("data/variable_values.rds")
+nc_data <- query_pums()
+```
+
+```{r}
+stopifnot(
+  nrow(nc_data) > 0,
+  inherits(nc_data, "census"),
+  is.numeric(nc_data$AGEP), is.numeric(nc_data$PWGTP),
+  is.factor(nc_data$SEX),
+  inherits(combined_data, "census"),
+  setequal(unique(combined_data$year), 2021:2024)
+)
+knitr::kable(as.data.frame(table(combined_data$year)),
+             col.names = c("Survey year", "Downloaded records"))
+cat("Single-year and multiple-year checks passed.")
+```
+
+### Summary and plot methods with different inputs
+
+First, I call the default summary and then select age and sex explicitly. I also select `year` in the combined data. The plots use different categorical inputs: sex for North Carolina and year for Wyoming. These weighted age plots demonstrate method dispatch and provide a visual check of the returned data.
+
+The combined summary pools the four annual samples. Its weighted counts across years should not be interpreted as a count of unique people.
+
+```{r}
 # Summarize all eligible variables
 summary(nc_data)
+```
 
+#### Summarize Selected Columns
+
+```{r}
 # Summarize selected variables
 summary(
   nc_data,
   numeric_vars = "AGEP",
   categorical_vars = "SEX"
 )
+```
 
+#### Plot Age by Sex
+
+```{r}
 # Weighted age boxplots by sex
 plot(nc_data, cat_var = "SEX", num_var = "AGEP")
+```
 
+#### Summarize Multiple Years
+
+```{r}
 # Summarize and plot multiple years
 summary(
   combined_data,
   numeric_vars = "AGEP",
   categorical_vars = c("SEX", "year")
 )
+```
 
+#### Plot Age by Year
+
+```{r}
 plot(combined_data, cat_var = "year", num_var = "AGEP")
 ```
+
+### Invalid inputs
+
+The following tests deliberately supply invalid arguments. Each test checks that an error occurs and displays its message while allowing the document to continue. This verifies that the functions reject invalid requests rather than silently downloading unintended data.
+
+```{r}
+expect_error <- function(expr) {
+  message <- tryCatch({ force(expr); NULL },
+                      error = function(e) conditionMessage(e))
+  if (is.null(message)) stop("Test failed: an error was expected.")
+  message
+}
+```
+
+#### Check Invalid Requests
+
+```{r}
+error_checks <- list(
+  "Invalid year" = expect_error(query_pums(year = 2020)),
+  "Multiple years in single-year query" = expect_error(query_pums(year = c(2023, 2024))),
+  "Missing weight" = expect_error(query_pums(numeric_vars = "AGEP")),
+  "Only weight" = expect_error(query_pums(numeric_vars = "PWGTP")),
+  "Invalid numeric variable" = expect_error(query_pums(numeric_vars = c("PWGTP", "BAD"))),
+  "Missing category" = expect_error(query_pums(categorical_vars = character(0))),
+  "Invalid category" = expect_error(query_pums(categorical_vars = "BAD")),
+  "Multiple geography levels" = expect_error(query_pums(geography = c("State", "Region"))),
+  "Invalid geography level" = expect_error(query_pums(geography = "All")),
+  "Invalid state code" = expect_error(query_pums(geography_values = "99")),
+  "Invalid plot input" = expect_error(plot(nc_data, cat_var = "AGEP", num_var = "SEX"))
+)
+knitr::kable(data.frame(Test = names(error_checks),
+                        Message = unlist(error_checks, use.names = FALSE)))
+```
+
+These examples test the State geography option. They do not constitute a live test of every Region, Division, or all-geographies query.
+
+## Investigation
+
+### Commuting Time in North Carolina
+
+#### Question and Data Selection
+
+Among North Carolina adults with a positive reported commute in 2024, how does commuting time differ by age group and sex?
+
+I use `JWMNP` for travel time to work in minutes, `AGEP` for age, and `SEX` for the sex categories returned by the Census. I also request `JWDP` to verify time-column conversion. The query below demonstrates different numeric inputs from the earlier age-only examples.
+
+```{r}
+commute_data <- query_pums(
+  year = 2024,
+  numeric_vars = c("AGEP", "PWGTP", "JWMNP", "JWDP"),
+  categorical_vars = "SEX",
+  geography = "State",
+  geography_values = "37"
+)
+stopifnot(is.numeric(commute_data$JWMNP),
+          inherits(commute_data$JWDP, "hms"))
+head(commute_data[c("AGEP", "JWMNP", "JWDP", "SEX")])
+```
+
+#### Select Adult Commuters
+
+```{r}
+# Keep adults with valid, positive travel time and positive weight.
+keep <- with(commute_data,
+             is.finite(AGEP) & AGEP >= 18 &
+             is.finite(JWMNP) & JWMNP > 0 &
+             is.finite(PWGTP) & PWGTP > 0 & !is.na(SEX))
+commuters <- commute_data[keep, ]
+stopifnot(nrow(commuters) > 0)
+```
+
+#### Create Age Groups
+
+```{r}
+commuters$age_group <- cut(
+  commuters$AGEP,
+  breaks = c(18, 30, 45, 65, Inf), right = FALSE,
+  labels = c("18–29", "30–44", "45–64", "65+")
+)
+knitr::kable(data.frame(
+  Stage = c("All downloaded records", "Included adult commuters"),
+  Records = c(nrow(commute_data), nrow(commuters))
+))
+```
+
+This restriction avoids treating not-applicable or zero commute values as actual travel times. It excludes people without a positive reported commute, including people working from home, so the results describe this selected group rather than all adults.
+
+### Overall weighted summary
+
+Here, I summarize two numeric variables and two categorical variables in one call. The time column `JWDP` is not included in the numeric summary.
+
+```{r}
+commute_summary <- summary(
+  commuters,
+  numeric_vars = c("AGEP", "JWMNP"),
+  categorical_vars = c("SEX", "age_group")
+)
+commute_summary
+overall_minutes <- unname(commute_summary$numeric$JWMNP["mean"])
+overall_sd <- unname(commute_summary$numeric$JWMNP["sd"])
+```
+
+The weighted mean commute in the included sample is **`r round(overall_minutes, 2)` minutes**, with a weighted standard deviation of **`r round(overall_sd, 2)` minutes**. The categorical counts are sums of person weights, not the number of downloaded rows.
+
+### Comparison by age group
+
+I use the custom plot method with a newly created categorical variable, `age_group`, and a different numeric variable, `JWMNP`. The boxplot shows distributions, while the table reports group means and standard deviations.
+
+```{r}
+plot(commuters, cat_var = "age_group", num_var = "JWMNP") +
+  ggplot2::labs(title = "Commuting time by age group: North Carolina, 2024",
+                x = "Age group", y = "Travel time to work (minutes)")
+```
+
+#### Summarize Each Group
+
+The helper below calls `summary()` separately for each group and collects the results in a table.
+
+```{r}
+# This helper uses summary.census() for every group's calculations.
+group_summary_table <- function(data, group_var) {
+  groups <- levels(droplevels(data[[group_var]]))
+  tables <- lapply(groups, function(g) {
+    subset <- data[!is.na(data[[group_var]]) & data[[group_var]] == g, ]
+    result <- summary(subset, numeric_vars = "JWMNP",
+                      categorical_vars = group_var)
+    data.frame(
+      Group = g,
+      Weighted_count = sum(result$categorical[[group_var]]),
+      Mean_minutes = unname(result$numeric$JWMNP["mean"]),
+      SD_minutes = unname(result$numeric$JWMNP["sd"])
+    )
+  })
+  do.call(rbind, tables)
+}
+```
+
+#### Report the Age-Group Results
+
+```{r}
+age_results <- group_summary_table(commuters, "age_group")
+knitr::kable(age_results, digits = 2,
+             col.names = c("Age group", "Weighted count", "Mean minutes", "SD minutes"))
+age_high <- age_results$Group[which.max(age_results$Mean_minutes)]
+age_low <- age_results$Group[which.min(age_results$Mean_minutes)]
+age_gap <- diff(range(age_results$Mean_minutes))
+```
+
+The **`r age_high`** group has the highest weighted mean commute and the **`r age_low`** group has the lowest. The difference between the largest and smallest group means is **`r round(age_gap, 2)` minutes**. If groups tie, this identifies the first tied group in table order. The boxplot complements these averages by showing the spread within each group.
+
+### Comparison by sex
+
+I next change the plot's categorical input to `SEX` and calculate separate weighted summaries for its levels. The grouping table calls my summary method on each subset; the summary method itself does not automatically group numeric statistics by the requested categorical variables.
+
+```{r}
+plot(commuters, cat_var = "SEX", num_var = "JWMNP") +
+  ggplot2::labs(title = "Commuting time by sex: North Carolina, 2024",
+                x = "Sex", y = "Travel time to work (minutes)")
+```
+
+#### Report the Sex-Group Results
+
+```{r}
+sex_results <- group_summary_table(commuters, "SEX")
+knitr::kable(sex_results, digits = 2,
+             col.names = c("Sex", "Weighted count", "Mean minutes", "SD minutes"))
+sex_high <- sex_results$Group[which.max(sex_results$Mean_minutes)]
+sex_gap <- diff(range(sex_results$Mean_minutes))
+```
+
+The largest weighted mean in this comparison is for **`r sex_high`**, and the range of the group means is **`r round(sex_gap, 2)` minutes**. These are descriptive differences; they do not establish that sex causes differences in commuting time.
+
+## Conclusion
+
+For the North Carolina investigation, the overall weighted mean is **`r round(overall_minutes, 2)` minutes**. The age-group mean range is **`r round(age_gap, 2)` minutes**, and the sex-group mean range is **`r round(sex_gap, 2)` minutes**.

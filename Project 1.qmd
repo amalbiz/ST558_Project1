@@ -1,7 +1,11 @@
 ---
-title: "Project 1"
+title: "Exploring Census PUMS Data with R"
 author: "AMJ"
-format: html
+format:
+  html:
+    theme:
+      light: minty
+      dark: vapor
 editor: visual
 ---
 
@@ -10,7 +14,12 @@ library(httr)
 library(jsonlite)
 library(tibble)
 library(hms)
+library(quantreg)
+library(ggplot2)
+readRenviron(".Renviron")
+stopifnot(nzchar(Sys.getenv("CENSUS_API_KEY")))
 ```
+
 ```{r}
 url <- "https://api.census.gov/data/2024/acs/acs1/pums/variables.json"
 
@@ -25,6 +34,7 @@ dictionary <- fromJSON(json_text, simplifyVector = FALSE)
 dictionary$variables$SEX
 dictionary$variables$SEX$values
 ```
+
 ```{r}
 get_variable_values <- function(year) {
 
@@ -79,6 +89,7 @@ dir.create("data", showWarnings = FALSE)
 
 saveRDS(variable_values, file = "data/variable_values.rds")
 ```
+
 ```{r}
 response_to_tibble <- function(response) {
   stop_for_status(response)
@@ -348,7 +359,6 @@ query_pums <- function(
 }
 ```
 
-
 ```{r}
 query_pums_years <- function(
     years = 2024,
@@ -385,22 +395,200 @@ query_pums_years <- function(
   return(combined_data)
 }
 ```
+
 ```{r}
-Sys.setenv(CENSUS_API_KEY = "3e4b20e68905f831c2a043359f0167b043a7ae8b")
+combined_data <- query_pums_years(
+  years = 2021:2024,
+  geography = "State",
+  geography_values = "56"  
+)
 file.exists("data/variable_values.rds")
 nc_data <- query_pums()
 
-head(nc_data)
-str(nc_data)
-class(nc_data)
-
-stopifnot(
-  nrow(nc_data) > 0,
-  inherits(nc_data, "census"),
-  is.numeric(nc_data$AGEP),
-  is.numeric(nc_data$PWGTP),
-  is.factor(nc_data$SEX)
-)
-
 ```
 
+```{r}
+# Weighted summaries: called automatically by summary(census_data)
+summary.census <- function(
+    object,
+    numeric_vars = NULL,
+    categorical_vars = NULL
+) {
+  is_numeric_variable <- function(x) {
+    is.numeric(x) &&
+      !inherits(x, c("difftime", "POSIXt", "Date"))
+  }
+
+  allowed_numeric <- names(object)[
+    vapply(object, is_numeric_variable, logical(1))
+  ]
+  allowed_numeric <- setdiff(allowed_numeric, c("PWGTP", "year"))
+
+  allowed_categorical <- names(object)[
+    vapply(object, function(x) {
+      is.factor(x) || is.character(x) || is.logical(x)
+    }, logical(1))
+  ]
+  allowed_categorical <- union(
+    allowed_categorical,
+    intersect("year", names(object))
+  )
+
+  if (is.null(numeric_vars)) {
+    numeric_vars <- allowed_numeric
+  }
+
+  if (is.null(categorical_vars)) {
+    categorical_vars <- allowed_categorical
+  }
+
+  if (!is.character(numeric_vars) || anyNA(numeric_vars) ||
+      !all(numeric_vars %in% allowed_numeric)) {
+    stop("Choose valid numeric variables, excluding PWGTP, year, and times.")
+  }
+
+  if (!is.character(categorical_vars) || anyNA(categorical_vars) ||
+      !all(categorical_vars %in% allowed_categorical)) {
+    stop("Choose valid categorical variables or year.")
+  }
+
+  weights <- object$PWGTP
+
+  if (!is.numeric(weights) || any(!is.finite(weights)) ||
+      any(weights < 0)) {
+    stop("PWGTP must contain finite, nonnegative numeric weights.")
+  }
+
+  numeric_results <- lapply(unique(numeric_vars), function(variable) {
+    x <- object[[variable]]
+
+    # Exclude missing values and their weights for this variable
+    keep <- is.finite(x) & weights > 0
+    x <- x[keep]
+    w <- weights[keep]
+
+    if (length(x) == 0) {
+      return(c(mean = NA_real_, sd = NA_real_))
+    }
+
+    weighted_mean <- sum(x * w) / sum(w)
+
+    # Equivalent to the assignment's formula, but more numerically stable
+    weighted_sd <- sqrt(
+      sum(w * (x - weighted_mean)^2) / sum(w)
+    )
+
+    c(mean = weighted_mean, sd = weighted_sd)
+  })
+
+  names(numeric_results) <- unique(numeric_vars)
+
+  categorical_results <- lapply(
+    unique(categorical_vars),
+    function(variable) {
+      x <- object[[variable]]
+
+      if (!is.factor(x)) {
+        x <- factor(x)
+      }
+
+      # Include missing values as a separate category when present
+      x <- addNA(x, ifany = TRUE)
+
+      counts <- tapply(weights, x, sum, default = 0)
+      setNames(as.numeric(counts), names(counts))
+    }
+  )
+
+  names(categorical_results) <- unique(categorical_vars)
+
+  list(
+    numeric = numeric_results,
+    categorical = categorical_results
+  )
+}
+
+
+# Weighted boxplots require ggplot2 and quantreg:
+# install.packages(c("ggplot2", "quantreg"))
+
+# Called automatically by plot(census_data, ...)
+plot.census <- function(x, cat_var, num_var, ...) {
+  if (!is.character(cat_var) || length(cat_var) != 1 ||
+      is.na(cat_var) || !(cat_var %in% names(x))) {
+    stop("Specify one categorical column name as a string.")
+  }
+
+  if (!is.character(num_var) || length(num_var) != 1 ||
+      is.na(num_var) || !(num_var %in% names(x))) {
+    stop("Specify one numeric column name as a string.")
+  }
+
+  category <- x[[cat_var]]
+  numeric_value <- x[[num_var]]
+
+  if (!(cat_var == "year" || is.factor(category) ||
+        is.character(category) || is.logical(category))) {
+    stop("cat_var must be categorical or year.")
+  }
+
+  if (!is.numeric(numeric_value) ||
+      inherits(numeric_value, c("difftime", "POSIXt", "Date")) ||
+      num_var %in% c("PWGTP", "year")) {
+    stop("num_var must be numeric, excluding PWGTP, year, and times.")
+  }
+
+  if (!is.numeric(x$PWGTP) || any(!is.finite(x$PWGTP)) ||
+      any(x$PWGTP < 0)) {
+    stop("PWGTP must contain finite, nonnegative numeric weights.")
+  }
+
+  keep <- !is.na(category) & is.finite(numeric_value) & x$PWGTP > 0
+  plot_data <- x[keep, ]
+
+  if (nrow(plot_data) == 0) {
+    stop("No complete observations with positive weights to plot.")
+  }
+
+  plot_data[[cat_var]] <- factor(plot_data[[cat_var]])
+
+  ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(
+      x = .data[[cat_var]],
+      y = .data[[num_var]],
+      weight = .data[["PWGTP"]]
+    )
+  ) +
+    ggplot2::geom_boxplot() +
+    ggplot2::labs(
+      x = cat_var,
+      y = num_var,
+      title = paste(num_var, "by", cat_var)
+    ) +
+    ggplot2::theme_minimal()
+}
+
+
+# Summarize all eligible variables
+summary(nc_data)
+
+# Summarize selected variables
+summary(
+  nc_data,
+  numeric_vars = "AGEP",
+  categorical_vars = "SEX"
+)
+
+# Weighted age boxplots by sex
+plot(nc_data, cat_var = "SEX", num_var = "AGEP")
+
+# Summarize and plot multiple years
+summary(
+  combined_data,
+  numeric_vars = "AGEP",
+  categorical_vars = c("SEX", "year")
+)
+
+plot(combined_data, cat_var = "year", num_var = "AGEP")
+```

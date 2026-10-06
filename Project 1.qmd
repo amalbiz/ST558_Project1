@@ -3,11 +3,24 @@ title: "Exploring Census PUMS Data with R"
 author: "AMJ"
 format:
   html:
+    toc: true
+    code-fold: true
+    code-tools: true
     theme:
       light: minty
       dark: vapor
 editor: visual
 ---
+
+## Introduction
+
+This project is based around developing functions with the Public Use Microdata (PUMS) Census API. The goal of this project is to learn how to work with R in a real-life application and to make something where users would be able to choose variables, survey years, and geographic subsets rather than rewriting the API request each time.
+
+## Setup
+
+The API key is stored in a separate `.Renviron` file in the main project folder, which will allow the API key to be used without it being exposed in the GitHub commits. I did this by making a `.gitignore` file which doesn't push any files to GitHub with the `.Renviron` file type extension.
+
+The code below loads the key and also all the packages that I will need to complete this project. The `quantreg` and `ggplot2` packages are useful for creating plots!
 
 ```{r}
 library(httr)
@@ -19,6 +32,8 @@ library(ggplot2)
 readRenviron(".Renviron")
 stopifnot(nzchar(Sys.getenv("CENSUS_API_KEY")))
 ```
+
+## Creating the functions
 
 ```{r}
 url <- "https://api.census.gov/data/2024/acs/acs1/pums/variables.json"

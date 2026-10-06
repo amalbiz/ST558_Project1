@@ -1,14 +1,6 @@
 ---
 title: "Exploring Census PUMS Data with R"
 author: "AMJ"
-format:
-  html:
-    toc: true
-    code-fold: true
-    code-tools: true
-    theme: cerulean
-    css: styles.css
-editor: visual
 ---
 
 ## Introduction
@@ -786,7 +778,7 @@ summary(
 
 ```{r}
 # Weighted age boxplots by sex
-plot(nc_data, cat_var = "SEX", num_var = "AGEP")
+plot(nc_data, cat_var = "SEX", num_var = "AGEP")+ggplot2::theme_gray()
 ```
 
 #### Summarize Multiple Years
@@ -803,7 +795,7 @@ summary(
 #### Plot Age by Year
 
 ```{r}
-plot(combined_data, cat_var = "year", num_var = "AGEP")
+plot(combined_data, cat_var = "year", num_var = "AGEP")+ggplot2::theme_gray()
 ```
 
 ### Invalid inputs
@@ -916,7 +908,7 @@ I use the custom plot method with a newly created categorical variable, `age_gro
 ```{r}
 plot(commuters, cat_var = "age_group", num_var = "JWMNP") +
   ggplot2::labs(title = "Commuting time by age group: North Carolina, 2024",
-                x = "Age group", y = "Travel time to work (minutes)")
+                x = "Age group", y = "Travel time to work (minutes)")+ggplot2::theme_gray()
 ```
 
 #### Summarize Each Group
@@ -962,7 +954,7 @@ I next change the plot's categorical input to `SEX` and calculate separate weigh
 ```{r}
 plot(commuters, cat_var = "SEX", num_var = "JWMNP") +
   ggplot2::labs(title = "Commuting time by sex: North Carolina, 2024",
-                x = "Sex", y = "Travel time to work (minutes)")
+                x = "Sex", y = "Travel time to work (minutes)")+ggplot2::theme_gray()
 ```
 
 #### Report the Sex-Group Results
